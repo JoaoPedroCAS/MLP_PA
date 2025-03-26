@@ -68,14 +68,14 @@ x_test_tensor = torch.tensor(x_test, dtype=torch.float32).to(device)
 y_test_tensor = torch.tensor(y_test, dtype=torch.long).to(device)
 
 # Configuração
-neurons_list = [10, 20, 50, 100, 200, 500]
-init_methods = ['random_normal', 'xavier', 'he', 'lecun', 'uniform']
+neurons_list = [1, 2, 5, 10, 20, 50, 100, 200, 500]
+init_methods = ['uniform']
 activations = {
     'relu': nn.ReLU(),
     'sigmoid': nn.Sigmoid(),
     'tanh': nn.Tanh()
 }
-n_runs = 1
+n_runs = 10
 batch_size = 60
 epochs = 1
 
@@ -123,9 +123,9 @@ class MLP(nn.Module):
         self.apply(get_initializer(init_method))
         
         # Aplicar rewiring uma vez após inicialização
-        with torch.no_grad():
-            self.layer1.weight.data = PA_rewiring_torch(self.layer1.weight.data)
-            self.layer2.weight.data = PA_rewiring_torch(self.layer2.weight.data)
+        #with torch.no_grad():
+        #    self.layer1.weight.data = PA_rewiring_torch(self.layer1.weight.data)
+        #    self.layer2.weight.data = PA_rewiring_torch(self.layer2.weight.data)
         
         self.to(device)
     
@@ -244,7 +244,7 @@ def plot_results(results, activations, init_methods):
         plt.xscale('log')
         plt.xlabel('Número de Neurônios')
         plt.ylabel('Acurácia')
-        title = f'Acurácia_vs_Neurônios_para_{act_name}_Média_Desvio_PA'
+        title = f'Acurácia_vs_Neurônios_para_{act_name}_Média_Desvio'
         plt.title(title.replace('_', ' '))
         plt.legend()
         plt.grid()
@@ -264,7 +264,7 @@ def plot_results(results, activations, init_methods):
         plt.xscale('log')
         plt.xlabel('Número de Neurônios')
         plt.ylabel('Tempo de Treinamento (s)')
-        title = f'Tempo_Treinamento_vs_Neurônios_para_{act_name}_PA'
+        title = f'Tempo_Treinamento_vs_Neurônios_para_{act_name}'
         plt.title(title.replace('_', ' '))
         plt.legend()
         plt.grid()
@@ -328,7 +328,7 @@ def plot_results(results, activations, init_methods):
         plt.grid()
         
         plt.tight_layout()
-        plt.savefig(f'plots/Estatísticas_Pesos_para_{act_name}_PA.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'plots/Estatísticas_Pesos_para_{act_name}.png', dpi=300, bbox_inches='tight')
         plt.show()
     
     # Máxima Acurácia por Método de Inicialização
@@ -345,7 +345,7 @@ def plot_results(results, activations, init_methods):
         plt.title(f'Máxima Acurácia para {act_name}')
         plt.grid()
     plt.tight_layout()
-    plt.savefig('plots/Máxima_Acurácia_por_Método_Inicialização_PA.png', dpi=300, bbox_inches='tight')
+    plt.savefig('plots/Máxima_Acurácia_por_Método_Inicialização.png', dpi=300, bbox_inches='tight')
     plt.show()
 
 # Gerar gráficos
