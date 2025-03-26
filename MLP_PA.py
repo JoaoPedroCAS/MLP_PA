@@ -77,7 +77,7 @@ activations = {
 }
 n_runs = 5
 batch_size = 128
-epochs = 10
+epochs = 1
 
 # Dicionário de resultados
 results = {
