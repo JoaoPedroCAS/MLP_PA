@@ -15,40 +15,39 @@ print(f"Usando dispositivo: {device}")
 
 # ====================== Funções de Rewiring PA ==============================
 def rewiring_torch(weights, seed=None):
-    dimensions = weights.shape
     if seed:
-        torch.manual_seed(seed)
-    
-    st = torch.zeros(dimensions[1], device=weights.device)
-    for neuron in range(1, dimensions[0]):
-        st = st + weights[neuron - 1]
-        P = st + torch.abs(torch.min(st)) + 1
-        P = P / torch.sum(P)
-        
-        # Criar distribuição multinomial para amostragem
-        targets = torch.multinomial(P, dimensions[1], replacement=False)
-        
-        edges_to_rewire = torch.argsort(weights[neuron])
-        weights[neuron, targets] = weights[neuron, edges_to_rewire]
+        rng = np.random.default_rng(seed)
+    else:
+        rng = np.random.default_rng()        
+    st = torch.zeros(weights.size(1), device=weights.device)
+    with torch.no_grad():
+        dimensions = weights.shape 
+        for neuron in range(1, dimensions[0]):  
+            st = st + weights[neuron - 1]
+            P = st + torch.abs(torch.min(st)) + 1  # garantir que não haja valores zero
+            P = P / torch.sum(P)
+            targets = rng.choice(
+                a=[i for i in range(dimensions[1])], 
+                replace=False,
+                size=dimensions[1],
+                p=P.cpu().detach().numpy()
+            ) 
+            edges_to_rewire = torch.argsort(weights[neuron])
+            weights[neuron, targets] = weights[neuron, edges_to_rewire]                
     return weights
 
-def PA_rewiring_torch(weights, seed=None):
-    if weights.ndim < 2:
+def PA_rewiring_torch(weights, seed=None): 
+    if weights.ndimension() < 2:
         raise ValueError("Apenas tensores 2D ou superiores são suportados")
-    
-    original_shape = weights.shape
-    output_neurons = weights.shape[0]
-    input_neurons = weights.numel() // output_neurons
-    
-    weights_out = weights.view((output_neurons, input_neurons)).clone()
-    weights_out = rewiring_torch(weights_out, seed)  # Rewiring nas linhas
-    
-    # Rewiring nas colunas (transpor, rewiring, transpor de volta)
-    weights_out_transposed = weights_out.t()
-    weights_out_transposed = rewiring_torch(weights_out_transposed, seed)
-    weights_out = weights_out_transposed.t()
-    
-    return weights_out.view(original_shape)
+    with torch.no_grad():  
+        output_neurons = weights.size(0)
+        input_neurons = weights.numel() // output_neurons    
+        dimensions = weights.shape             
+        weights = weights.reshape((output_neurons, input_neurons))
+        rewiring_torch(weights, seed)   
+        rewiring_torch(torch.transpose(weights, 0, 1), seed)        
+        weights = weights.reshape((dimensions))          
+    return weights  # retornar tensor reconfigurado
 # =============================================================================
 
 # Carregar dataset MNIST
@@ -75,7 +74,7 @@ activations = {
     'sigmoid': nn.Sigmoid(),
     'tanh': nn.Tanh()
 }
-n_runs = 10
+n_runs = 5
 batch_size = 60
 epochs = 1
 
