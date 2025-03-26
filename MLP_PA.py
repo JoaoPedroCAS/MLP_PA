@@ -1,35 +1,73 @@
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
+import numpy as np
 import matplotlib.pyplot as plt
 import time
 from tqdm import tqdm
 
-# Check if CUDA is available and set device
+# Verificar disponibilidade da CUDA e definir dispositivo
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
+print(f"Usando dispositivo: {device}")
 
-# Load MNIST dataset
+# ====================== Funções de Rewiring PA ==============================
+def rewiring_torch(weights, seed=None):
+    dimensions = weights.shape
+    if seed:
+        torch.manual_seed(seed)
+    
+    st = torch.zeros(dimensions[1], device=weights.device)
+    for neuron in range(1, dimensions[0]):
+        st = st + weights[neuron - 1]
+        P = st + torch.abs(torch.min(st)) + 1
+        P = P / torch.sum(P)
+        
+        # Criar distribuição multinomial para amostragem
+        targets = torch.multinomial(P, dimensions[1], replacement=False)
+        
+        edges_to_rewire = torch.argsort(weights[neuron])
+        weights[neuron, targets] = weights[neuron, edges_to_rewire]
+    return weights
+
+def PA_rewiring_torch(weights, seed=None):
+    if weights.ndim < 2:
+        raise ValueError("Apenas tensores 2D ou superiores são suportados")
+    
+    original_shape = weights.shape
+    output_neurons = weights.shape[0]
+    input_neurons = weights.numel() // output_neurons
+    
+    weights_out = weights.view((output_neurons, input_neurons)).clone()
+    weights_out = rewiring_torch(weights_out, seed)  # Rewiring nas linhas
+    
+    # Rewiring nas colunas (transpor, rewiring, transpor de volta)
+    weights_out_transposed = weights_out.t()
+    weights_out_transposed = rewiring_torch(weights_out_transposed, seed)
+    weights_out = weights_out_transposed.t()
+    
+    return weights_out.view(original_shape)
+# =============================================================================
+
+# Carregar dataset MNIST
 train_dataset = MNIST(root='./data', train=True, download=True, transform=ToTensor())
 test_dataset = MNIST(root='./data', train=False, download=True, transform=ToTensor())
 
-# Convert to numpy arrays and preprocess
+# Converter para arrays numpy e pré-processar
 x_train = train_dataset.data.numpy().reshape(-1, 784).astype('float32') / 255.0
 y_train = train_dataset.targets.numpy()
 x_test = test_dataset.data.numpy().reshape(-1, 784).astype('float32') / 255.0
 y_test = test_dataset.targets.numpy()
 
-# Convert to PyTorch tensors and move to device
+# Converter para tensores PyTorch e mover para o dispositivo
 x_train_tensor = torch.tensor(x_train, dtype=torch.float32).to(device)
 y_train_tensor = torch.tensor(y_train, dtype=torch.long).to(device)
 x_test_tensor = torch.tensor(x_test, dtype=torch.float32).to(device)
 y_test_tensor = torch.tensor(y_test, dtype=torch.long).to(device)
 
-# Configuration
+# Configuração
 neurons_list = [10, 20, 50, 100, 200, 500]
 init_methods = ['random_normal', 'xavier', 'he', 'lecun', 'uniform']
 activations = {
@@ -37,11 +75,11 @@ activations = {
     'sigmoid': nn.Sigmoid(),
     'tanh': nn.Tanh()
 }
-n_runs = 1
-batch_size = 60
-epochs = 1
+n_runs = 5
+batch_size = 128
+epochs = 10
 
-# Initialize results dictionary (same structure as before)
+# Dicionário de resultados
 results = {
     act_name: {
         init_method: {
@@ -81,10 +119,14 @@ class MLP(nn.Module):
         self.output = nn.Linear(n_neurons, 10)
         self.activation = activation
         
-        # Apply weight initialization
+        # Aplicar inicialização
         self.apply(get_initializer(init_method))
         
-        # Move model to device
+        # Aplicar rewiring uma vez após inicialização
+        with torch.no_grad():
+            self.layer1.weight.data = PA_rewiring_torch(self.layer1.weight.data)
+            self.layer2.weight.data = PA_rewiring_torch(self.layer2.weight.data)
+        
         self.to(device)
     
     def forward(self, x):
@@ -97,11 +139,10 @@ def train_model(model, train_loader, test_loader):
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters())
     
-    # Training loop
+    # Loop de treinamento
     model.train()
     for epoch in range(epochs):
         for inputs, labels in train_loader:
-            # Move data to GPU
             inputs, labels = inputs.to(device), labels.to(device)
             
             optimizer.zero_grad()
@@ -110,7 +151,7 @@ def train_model(model, train_loader, test_loader):
             loss.backward()
             optimizer.step()
     
-    # Evaluation
+    # Avaliação
     model.eval()
     correct = 0
     total = 0
@@ -125,7 +166,7 @@ def train_model(model, train_loader, test_loader):
     return correct / total
 
 def get_weight_stats(model):
-    # Move weights to CPU for numpy conversion if they're on GPU
+    # Mover pesos para CPU para conversão numpy se estiverem na GPU
     W1 = model.layer1.weight.data.cpu().numpy()
     W2 = model.layer2.weight.data.cpu().numpy()
     return {
@@ -135,24 +176,24 @@ def get_weight_stats(model):
         'W2_std': np.std(W2)
     }
 
-# Main experiment loop
+# Loop principal do experimento
 for act_name, activation in activations.items():
-    print(f"\nTesting activation: {act_name}")
+    print(f"\nTestando ativação: {act_name}")
     for init_method in init_methods:
-        print(f"\nInitialization method: {init_method}")
+        print(f"\nMétodo de inicialização: {init_method}")
         for i, n_neurons in enumerate(tqdm(neurons_list)):
             accuracies = []
             train_times = []
             weight_stats_list = []
             
             for run in range(n_runs):
-                # Create data loaders
+                # Criar data loaders
                 train_dataset = TensorDataset(x_train_tensor, y_train_tensor)
                 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
                 test_dataset = TensorDataset(x_test_tensor, y_test_tensor)
                 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
                 
-                # Create and train model
+                # Criar e treinar modelo
                 model = MLP(n_neurons, activation, init_method)
                 
                 start_time = time.time()
@@ -165,13 +206,13 @@ for act_name, activation in activations.items():
                 train_times.append(train_time)
                 weight_stats_list.append(weight_stats)
             
-            # Store results
+            # Armazenar resultados
             results[act_name][init_method]['accuracy_mean'][i] = np.mean(accuracies)
             results[act_name][init_method]['accuracy_std'][i] = np.std(accuracies)
             results[act_name][init_method]['train_time_mean'][i] = np.mean(train_times)
             results[act_name][init_method]['train_time_std'][i] = np.std(train_times)
             
-            # Average weight statistics across runs
+            # Estatísticas médias dos pesos entre as execuções
             avg_weight_stats = {
                 'W1_mean': np.mean([stat['W1_mean'] for stat in weight_stats_list]),
                 'W1_std': np.mean([stat['W1_std'] for stat in weight_stats_list]),
@@ -180,12 +221,16 @@ for act_name, activation in activations.items():
             }
             results[act_name][init_method]['weight_stats'][i] = avg_weight_stats
 
-# Plotting functions (same as before)
+# Função de plotagem (mesma de antes)
 def plot_results(results, activations, init_methods):
-    """Plot all results with error bars"""
-    colors = plt.cm.tab10.colors  # Color palette for different initialization methods
+    """Plotar todos os resultados com barras de erro"""
+    colors = plt.cm.tab10.colors
     
-    # Plot Accuracy vs Neurons for each activation function
+    # Criar diretório de saída
+    import os
+    os.makedirs('plots', exist_ok=True)
+    
+    # Plotar Acurácia vs Neurônios
     for act_name in activations.keys():
         plt.figure(figsize=(12, 6))
         for i, init_method in enumerate(init_methods):
@@ -197,15 +242,16 @@ def plot_results(results, activations, init_methods):
                 color=colors[i]
             )
         plt.xscale('log')
-        plt.xlabel('Number of Neurons')
-        plt.ylabel('Accuracy')
-        title = f'Accuracy_vs_Neurons_for_{act_name}_Mean_Std_over_runs'
-        plt.title(title.replace('_', ' '))  # Show nice title with spaces
+        plt.xlabel('Número de Neurônios')
+        plt.ylabel('Acurácia')
+        title = f'Acurácia_vs_Neurônios_para_{act_name}_Média_Desvio_PA'
+        plt.title(title.replace('_', ' '))
         plt.legend()
         plt.grid()
-        plt.savefig(f"{title}.png")  # Save with proper filename
+        plt.savefig(f'plots/{title}.png', dpi=300, bbox_inches='tight')
+        plt.show()
         
-        # Plot Training Time vs Neurons
+        # Plotar Tempo de Treinamento vs Neurônios
         plt.figure(figsize=(12, 6))
         for i, init_method in enumerate(init_methods):
             data = results[act_name][init_method]
@@ -216,74 +262,76 @@ def plot_results(results, activations, init_methods):
                 color=colors[i]
             )
         plt.xscale('log')
-        plt.xlabel('Number of Neurons')
-        plt.ylabel('Training Time (s)')
-        title = f'Training_Time_vs_Neurons_for_{act_name}'
+        plt.xlabel('Número de Neurônios')
+        plt.ylabel('Tempo de Treinamento (s)')
+        title = f'Tempo_Treinamento_vs_Neurônios_para_{act_name}_PA'
         plt.title(title.replace('_', ' '))
         plt.legend()
         plt.grid()
-        plt.savefig(f"{title}.png")
+        plt.savefig(f'plots/{title}.png', dpi=300, bbox_inches='tight')
+        plt.show()
     
-    # Plot Weight Statistics
+    # Plotar Estatísticas dos Pesos
     for act_name in activations.keys():
         plt.figure(figsize=(15, 10))
         
-        # W1 Mean
+        # W1 Média
         plt.subplot(2, 2, 1)
         for i, init_method in enumerate(init_methods):
             data = results[act_name][init_method]
             w1_means = [stat['W1_mean'] for stat in data['weight_stats']]
             plt.plot(data['neurons'], w1_means, 'o-', label=init_method, color=colors[i])
         plt.xscale('log')
-        plt.xlabel('Number of Neurons')
-        plt.ylabel('Mean Weight Value')
-        plt.title(f'W1 Mean for {act_name}')
+        plt.xlabel('Número de Neurônios')
+        plt.ylabel('Valor Médio do Peso')
+        plt.title(f'W1 Média para {act_name}')
         plt.legend()
         plt.grid()
         
-        # W1 Std
+        # W1 Desvio Padrão
         plt.subplot(2, 2, 2)
         for i, init_method in enumerate(init_methods):
             data = results[act_name][init_method]
             w1_stds = [stat['W1_std'] for stat in data['weight_stats']]
             plt.plot(data['neurons'], w1_stds, 'o-', label=init_method, color=colors[i])
         plt.xscale('log')
-        plt.xlabel('Number of Neurons')
-        plt.ylabel('Weight Std Dev')
-        plt.title(f'W1 Standard Deviation for {act_name}')
+        plt.xlabel('Número de Neurônios')
+        plt.ylabel('Desvio Padrão do Peso')
+        plt.title(f'W1 Desvio Padrão para {act_name}')
         plt.legend()
         plt.grid()
         
-        # W2 Mean
+        # W2 Média
         plt.subplot(2, 2, 3)
         for i, init_method in enumerate(init_methods):
             data = results[act_name][init_method]
             w2_means = [stat['W2_mean'] for stat in data['weight_stats']]
             plt.plot(data['neurons'], w2_means, 'o-', label=init_method, color=colors[i])
         plt.xscale('log')
-        plt.xlabel('Number of Neurons')
-        plt.ylabel('Mean Weight Value')
-        plt.title(f'W2 Mean for {act_name}')
+        plt.xlabel('Número de Neurônios')
+        plt.ylabel('Valor Médio do Peso')
+        plt.title(f'W2 Média para {act_name}')
         plt.legend()
         plt.grid()
         
-        # W2 Std
+        # W2 Desvio Padrão
         plt.subplot(2, 2, 4)
         for i, init_method in enumerate(init_methods):
             data = results[act_name][init_method]
             w2_stds = [stat['W2_std'] for stat in data['weight_stats']]
             plt.plot(data['neurons'], w2_stds, 'o-', label=init_method, color=colors[i])
         plt.xscale('log')
-        plt.xlabel('Number of Neurons')
-        plt.ylabel('Weight Std Dev')
-        plt.title(f'W2 Standard Deviation for {act_name}')
+        plt.xlabel('Número de Neurônios')
+        plt.ylabel('Desvio Padrão do Peso')
+        plt.title(f'W2 Desvio Padrão para {act_name}')
         plt.legend()
         plt.grid()
         
         plt.tight_layout()
-        plt.savefig(f'Weight_Statistics_for_{act_name}.png')
+        plt.savefig(f'plots/Estatísticas_Pesos_para_{act_name}_PA.png', dpi=300, bbox_inches='tight')
+        plt.show()
     
-    # Max Accuracy per Initialization Method
+    # Máxima Acurácia por Método de Inicialização
     plt.figure(figsize=(15, 5))
     for i, act_name in enumerate(activations.keys()):
         plt.subplot(1, len(activations), i+1)
@@ -292,12 +340,13 @@ def plot_results(results, activations, init_methods):
             for init, data in results[act_name].items()
         }
         plt.bar(max_accuracies.keys(), max_accuracies.values(), color=colors[:len(init_methods)])
-        plt.xlabel('Initialization Method')
-        plt.ylabel('Max Mean Accuracy')
-        plt.title(f'Max Accuracy for {act_name}')
+        plt.xlabel('Método de Inicialização')
+        plt.ylabel('Máxima Acurácia Média')
+        plt.title(f'Máxima Acurácia para {act_name}')
         plt.grid()
     plt.tight_layout()
-    plt.savefig('Max_Accuracy_per_Initialization_Method.png')
+    plt.savefig('plots/Máxima_Acurácia_por_Método_Inicialização_PA.png', dpi=300, bbox_inches='tight')
+    plt.show()
 
-# Generate plots
+# Gerar gráficos
 plot_results(results, activations, init_methods)
