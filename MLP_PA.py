@@ -75,8 +75,8 @@ activations = {
     'sigmoid': nn.Sigmoid(),
     'tanh': nn.Tanh()
 }
-n_runs = 5
-batch_size = 128
+n_runs = 1
+batch_size = 60
 epochs = 1
 
 # Dicionário de resultados
